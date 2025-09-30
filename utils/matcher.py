@@ -1,11 +1,11 @@
 import re
-from sentence_transformers import SentenceTransformer, util
-import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from typing import Dict, List
 
 class CandidateMatcher:
     def __init__(self):
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
         self.skills_db = [
             'python', 'java', 'javascript', 'sql', 'aws', 'docker', 'kubernetes',
             'machine learning', 'deep learning', 'react', 'angular', 'vue',
@@ -22,21 +22,12 @@ class CandidateMatcher:
         skills_match = self._calculate_skills_match(candidate_data['skills'], job_description)
         experience_match = self._calculate_experience_match(candidate_data['experience'], job_description)
         semantic_match = self._calculate_semantic_match(candidate_data['raw_text'], job_description)
-        keywords_match = self._calculate_keywords_match(candidate_data['raw_text'], job_description)
         
         # Weighted final score
-        weights = {
-            'skills': 0.4,
-            'experience': 0.3,
-            'semantic': 0.2,
-            'keywords': 0.1
-        }
-        
         final_score = (
-            skills_match * weights['skills'] +
-            experience_match * weights['experience'] +
-            semantic_match * weights['semantic'] +
-            keywords_match * weights['keywords']
+            skills_match * 0.5 +
+            experience_match * 0.3 +
+            semantic_match * 0.2
         ) * 100
         
         return {
@@ -44,8 +35,7 @@ class CandidateMatcher:
             'match_score': final_score,
             'skills_match': skills_match * 100,
             'experience_match': experience_match * 100,
-            'semantic_match': semantic_match * 100,
-            'keywords_match': keywords_match * 100
+            'semantic_match': semantic_match * 100
         }
     
     def _calculate_skills_match(self, candidate_skills: List[str], job_description: str) -> float:
@@ -71,7 +61,6 @@ class CandidateMatcher:
     
     def _calculate_experience_match(self, candidate_experience: float, job_description: str) -> float:
         """Calculate experience match"""
-        # Extract required experience from JD
         required_exp = self._extract_required_experience(job_description)
         
         if required_exp == 0:
@@ -98,34 +87,29 @@ class CandidateMatcher:
         return 0.0
     
     def _calculate_semantic_match(self, resume_text: str, job_description: str) -> float:
-        """Calculate semantic similarity using sentence transformers"""
-        # Encode both texts
-        resume_embedding = self.model.encode(resume_text, convert_to_tensor=True)
-        jd_embedding = self.model.encode(job_description, convert_to_tensor=True)
+        """Calculate semantic similarity using TF-IDF and cosine similarity"""
+        # Combine texts
+        documents = [resume_text, job_description]
         
-        # Calculate cosine similarity
-        similarity = util.pytorch_cos_sim(resume_embedding, jd_embedding)
-        return similarity.item()
-    
-    def _calculate_keywords_match(self, resume_text: str, job_description: str) -> float:
-        """Calculate keyword match percentage"""
-        # Extract important keywords from JD (non-skill keywords)
-        jd_keywords = self._extract_keywords(job_description)
-        resume_keywords = self._extract_keywords(resume_text)
+        # Create TF-IDF vectorizer
+        vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
         
-        if not jd_keywords:
+        try:
+            # Transform documents to TF-IDF features
+            tfidf_matrix = vectorizer.fit_transform(documents)
+            
+            # Calculate cosine similarity
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
+            return similarity[0][0]
+        except:
             return 0.0
-        
-        matched_keywords = set(resume_keywords) & set(jd_keywords)
-        return len(matched_keywords) / len(jd_keywords)
     
     def _extract_keywords(self, text: str) -> List[str]:
         """Extract important keywords from text"""
-        # Simple keyword extraction - you can enhance this
         words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
         
         # Filter out common words and focus on meaningful terms
         stop_words = {'this', 'that', 'with', 'have', 'from', 'they', 'what'}
         keywords = [word for word in words if word not in stop_words and word not in self.skills_db]
         
-        return list(set(keywords))[:20]  # Return top 20 unique keywords
+        return list(set(keywords))[:20]
