@@ -1,15 +1,10 @@
 import re
-import spacy
 from PyPDF2 import PdfReader
 from docx import Document
 from typing import Dict, List
-import subprocess
-import sys
 
 class ResumeParser:
     def __init__(self):
-        # Download spaCy model if not available
-        self.nlp = self._load_spacy_model()
         self.skills_db = [
             'python', 'java', 'javascript', 'sql', 'aws', 'docker', 'kubernetes',
             'machine learning', 'deep learning', 'react', 'angular', 'vue',
@@ -19,46 +14,29 @@ class ResumeParser:
             'pandas', 'numpy', 'matplotlib', 'seaborn', 'plotly'
         ]
     
-    def _load_spacy_model(self):
-        """Load spaCy model, download if not available"""
-        try:
-            # Try to load the model
-            nlp = spacy.load("en_core_web_sm")
-            return nlp
-        except OSError:
-            # Model not found, download it
-            print("Downloading spaCy model...")
-            subprocess.check_call([
-                sys.executable, "-m", "spacy", "download", "en_core_web_sm"
-            ])
-            # Load the model after download
-            nlp = spacy.load("en_core_web_sm")
-            return nlp
-    
     def parse_resume(self, file_path: str) -> Dict:
         """Parse resume file and extract structured information"""
         try:
             text = self._extract_text(file_path)
             
             return {
-                'name': self._extract_name(text),
+                'name': self._extract_name_simple(text),
                 'email': self._extract_email(text),
                 'phone': self._extract_phone(text),
                 'skills': self._extract_skills(text),
                 'experience': self._extract_experience(text),
-                'education': self._extract_education(text),
+                'education': self._extract_education_simple(text),
                 'raw_text': text
             }
         except Exception as e:
-            # Return default data if parsing fails
             return {
-                'name': 'Unknown Candidate',
+                'name': 'Candidate',
                 'email': 'N/A',
                 'phone': 'N/A',
                 'skills': [],
                 'experience': 0.0,
                 'education': 'N/A',
-                'raw_text': f'Error parsing resume: {str(e)}'
+                'raw_text': f'Error: {str(e)}'
             }
     
     def _extract_text(self, file_path: str) -> str:
@@ -71,8 +49,8 @@ class ResumeParser:
             else:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return f.read()
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
+        except:
+            return "Could not read file"
     
     def _extract_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF file"""
@@ -81,29 +59,44 @@ class ResumeParser:
             with open(file_path, 'rb') as f:
                 reader = PdfReader(f)
                 for page in reader.pages:
-                    text += page.extract_text() + "\n"
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
             return text
-        except Exception as e:
-            return f"Error reading PDF: {str(e)}"
+        except:
+            return "PDF read error"
     
     def _extract_from_docx(self, file_path: str) -> str:
         """Extract text from DOCX file"""
         try:
             doc = Document(file_path)
-            return "\n".join([paragraph.text for paragraph in doc.paragraphs])
-        except Exception as e:
-            return f"Error reading DOCX: {str(e)}"
-    
-    def _extract_name(self, text: str) -> str:
-        """Extract candidate name using spaCy NER"""
-        try:
-            doc = self.nlp(text)
-            for ent in doc.ents:
-                if ent.label_ == "PERSON":
-                    return ent.text
-            return "Unknown Candidate"
+            return "\n".join([paragraph.text for paragraph in doc.paragraphs if paragraph.text])
         except:
-            return "Unknown Candidate"
+            return "DOCX read error"
+    
+    def _extract_name_simple(self, text: str) -> str:
+        """Simple name extraction without spaCy"""
+        # Look for patterns like "Name: John Doe" or email prefixes
+        lines = text.split('\n')
+        for line in lines[:10]:  # Check first 10 lines
+            line = line.strip()
+            if any(keyword in line.lower() for keyword in ['name:', 'full name:', 'candidate:']):
+                # Extract name after the keyword
+                name_part = line.split(':', 1)[-1].strip()
+                if name_part and len(name_part) > 2:
+                    return name_part
+            
+            # If line looks like a name (2-3 words, no special chars)
+            if re.match(r'^[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){1,2}$', line):
+                return line
+        
+        # Fallback: use email username
+        email = self._extract_email(text)
+        if email != "No email found":
+            username = email.split('@')[0]
+            return username.replace('.', ' ').title()
+        
+        return "Candidate"
     
     def _extract_email(self, text: str) -> str:
         """Extract email address"""
@@ -136,24 +129,27 @@ class ResumeParser:
             r'experience.*?(\d+)'
         ]
         
+        max_exp = 0.0
         for pattern in patterns:
             matches = re.findall(pattern, text.lower())
-            if matches:
-                # Return the highest experience found
-                return float(max(matches))
+            for match in matches:
+                exp = float(match)
+                if exp > max_exp:
+                    max_exp = exp
         
-        return 0.0
+        return max_exp
     
-    def _extract_education(self, text: str) -> str:
-        """Extract education information"""
+    def _extract_education_simple(self, text: str) -> str:
+        """Simple education extraction without spaCy"""
         education_keywords = [
             'bachelor', 'master', 'phd', 'mba', 'bs', 'ms', 'ba', 'ma',
             'university', 'college', 'degree', 'graduated'
         ]
         
-        sentences = text.split('.')
-        for sentence in sentences:
-            if any(keyword in sentence.lower() for keyword in education_keywords):
-                return sentence.strip()[:100]  # Limit length
+        lines = text.split('\n')
+        for line in lines:
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in education_keywords):
+                return line.strip()[:80]  # Limit length
         
         return "Education not specified"
